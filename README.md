@@ -25,7 +25,7 @@ The first interface slice is dependency-free HTML, CSS, and JavaScript. It can b
 - Light/dark theme toggle
 - Continue, all items, saved, collections, search, and grid/list views
 
-The offline capture engine and PDF persistence are the next implementation layer; the desktop shell, browser extension foundation, and release workflow are already scaffolded.
+The desktop shell includes the offline capture engine and PDF persistence foundation; the browser extension foundation and release workflow are also scaffolded for the first packaged release.
 
 ## Run the interface locally
 

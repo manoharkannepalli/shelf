@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Save to Shelf</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <div class="popup-brand"><span class="mini-mark">✦</span><span>shelf</span></div>
+      <p class="kicker">Make room for this</p>
+      <h1 id="page-title">Looking at this page…</h1>
+      <p class="page-url" id="page-url">Reading the current tab.</p>
+      <div class="collection-row"><span class="label">Collection</span><select id="collection"><option>Learning</option><option>Work</option><option>Ideas</option><option>Inspiration</option></select></div>
+      <button class="save-button" id="save-button" type="button"><span>Save offline to Shelf</span><span>↗</span></button>
+      <button class="secondary-button" id="copy-button" type="button">Copy link instead</button>
+      <p class="privacy-note"><span>●</span> Saved locally on your device</p>
+      <p class="status" id="status" aria-live="polite"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
