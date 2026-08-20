@@ -1,6 +1,6 @@
 {
   "name": "shelf",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "packageManager": "pnpm@11.19.0",
   "description": "A quieter way to read — a local-first reading shelf for links and PDFs.",
