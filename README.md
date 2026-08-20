@@ -36,6 +36,15 @@ pnpm run dev
 
 The browser extension lives in `extension/`. Load it as an unpacked extension in a Chromium-based browser while developing. The desktop shell uses Tauri 2 and is configured to publish DMG and NSIS installers from GitHub Actions when a version tag is pushed.
 
+## Security notes
+
+- Shelf is local-first: reading data and saved PDFs stay on the device.
+- Desktop file access is limited to Shelf's application data folder; the embedded WebView storage folder is excluded.
+- Network capture and saved article links accept HTTPS only.
+- Imported backups are normalized and have embedded HTML stripped down to safe text paragraphs before display.
+- The desktop shell uses a restrictive content security policy and does not expose Tauri APIs globally to the page.
+- macOS builds use an ad-hoc signature by default. For trusted downloads without the Gatekeeper workaround, add Apple Developer signing and notarization secrets to the repository; the release workflow already accepts them.
+
 ## License
 
 This project is intended to be released under the MIT License.

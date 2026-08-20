@@ -1,11 +1,58 @@
+import { getCurrent, onOpenUrl } from '@tauri-apps/plugin-deep-link';
+import { BaseDirectory, mkdir, readTextFile, writeFile, writeTextFile } from '@tauri-apps/plugin-fs';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { openUrl } from '@tauri-apps/plugin-opener';
+
+function safeHttpsUrl(value) {
+  try {
+    const parsed = new URL(String(value));
+    return parsed.protocol === 'https:' ? parsed.href : '';
+  } catch { return ''; }
+}
+
+function sanitizeSnapshotHtml(value) {
+  if (typeof value !== 'string' || value.length > 500_000) return '';
+  const template = document.createElement('template');
+  template.innerHTML = value;
+  template.content.querySelectorAll('script, style, noscript, iframe, object, embed, form, a, img, video, audio, svg').forEach((node) => node.remove());
+  return [...template.content.querySelectorAll('p')]
+    .map((node) => (node.textContent || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .map((text) => `<p>${escapeHtml(text)}</p>`)
+    .join('');
+}
+
+function sanitizeItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  const type = item.type === 'pdf' ? 'pdf' : 'article';
+  const id = Number.isSafeInteger(item.id) && item.id > 0 ? item.id : Date.now();
+  return {
+    id,
+    type,
+    title: String(item.title || 'Untitled').slice(0, 240),
+    description: String(item.description || '').slice(0, 2000),
+    source: String(item.source || '').slice(0, 240),
+    time: String(item.time || '').slice(0, 80),
+    status: ['to-read', 'reading', 'finished'].includes(item.status) ? item.status : 'to-read',
+    collection: String(item.collection || '').slice(0, 120),
+    tag: String(item.tag || '').slice(0, 120),
+    progress: Math.min(100, Math.max(0, Number(item.progress) || 0)),
+    tone: ['clay', 'sage', 'lavender', 'sky'].includes(item.tone) ? item.tone : 'clay',
+    saved: String(item.saved || 'Saved recently').slice(0, 120),
+    featured: Boolean(item.featured),
+    url: type === 'article' ? safeHttpsUrl(item.url) : '',
+    filePath: type === 'pdf' && /^files\/\d+\.pdf$/.test(String(item.filePath || '')) ? String(item.filePath) : '',
+    snapshotHtml: sanitizeSnapshotHtml(item.snapshotHtml),
+    offline: Boolean(item.offline)
+  };
+}
+
 (function setupShelfBridges() {
-  const desktop = Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
-  const fs = () => window.__TAURI__?.fs;
+  const desktop = Boolean(window.__TAURI_INTERNALS__);
 
   async function loadItems() {
-    if (!desktop || !fs()) return null;
+    if (!desktop) return null;
     try {
-      const { readTextFile, BaseDirectory } = fs();
       const raw = await readTextFile('library.json', { baseDir: BaseDirectory.AppLocalData });
       const parsed = JSON.parse(raw);
       return Array.isArray(parsed.items) ? parsed.items : null;
@@ -13,15 +60,13 @@
   }
 
   async function saveItems(items) {
-    if (!desktop || !fs()) return;
-    const { mkdir, writeTextFile, BaseDirectory } = fs();
+    if (!desktop) return;
     await mkdir('.', { baseDir: BaseDirectory.AppLocalData, recursive: true }).catch(() => {});
     await writeTextFile('library.json', JSON.stringify({ version: 1, savedAt: new Date().toISOString(), items }, null, 2), { baseDir: BaseDirectory.AppLocalData });
   }
 
   async function savePdf(file, id) {
-    if (!desktop || !fs() || !file) return null;
-    const { mkdir, writeFile, BaseDirectory } = fs();
+    if (!desktop || !file) return null;
     await mkdir('files', { baseDir: BaseDirectory.AppLocalData, recursive: true }).catch(() => {});
     const filePath = `files/${id}.pdf`;
     await writeFile(filePath, new Uint8Array(await file.arrayBuffer()), { baseDir: BaseDirectory.AppLocalData });
@@ -30,7 +75,9 @@
 
   function captureEscape(value) { return value.replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[char])); }
   async function capture(url) {
-    const response = window.__TAURI__?.http?.fetch ? await window.__TAURI__.http.fetch(url, { method: 'GET' }) : await fetch(url, { method: 'GET' });
+    const safeUrl = safeHttpsUrl(url);
+    if (!safeUrl) throw new Error('Shelf saves HTTPS links only');
+    const response = desktop ? await tauriFetch(safeUrl, { method: 'GET' }) : await fetch(safeUrl, { method: 'GET' });
     if (!response.ok) throw new Error(`Unable to save this page (${response.status})`);
     const document = new DOMParser().parseFromString(await response.text(), 'text/html');
     document.querySelectorAll('script, style, noscript, iframe, nav, aside, footer, form, header').forEach((node) => node.remove());
@@ -67,12 +114,11 @@ const state = {
 async function listenForShelfLinks() {
   if (!window.__TAURI_INTERNALS__) return;
   try {
-    const { getCurrent, onOpenUrl } = await import('@tauri-apps/plugin-deep-link');
     const handle = (urls) => {
       const deepLink = urls.find((url) => url.startsWith('shelf://save'));
       if (!deepLink) return;
       const parsed = new URL(deepLink);
-      const link = parsed.searchParams.get('url');
+      const link = safeHttpsUrl(parsed.searchParams.get('url'));
       const collection = parsed.searchParams.get('collection');
       if (!link) return;
       openModal('link');
@@ -135,11 +181,13 @@ let activeReaderId = null;
 function loadItems() {
   try {
     const saved = JSON.parse(localStorage.getItem('shelf-items'));
-    return Array.isArray(saved) && saved.length ? saved : defaultItems;
+    const items = Array.isArray(saved) ? saved.map(sanitizeItem).filter(Boolean).slice(0, 500) : [];
+    return items.length ? items : defaultItems;
   } catch { return defaultItems; }
 }
 
 function persist() {
+  state.items = state.items.map(sanitizeItem).filter(Boolean).slice(0, 500);
   const serialized = JSON.stringify(state.items);
   localStorage.setItem('shelf-items', serialized);
   localStorage.setItem('shelf-items-backup', JSON.stringify({ savedAt: new Date().toISOString(), items: state.items }));
@@ -271,10 +319,13 @@ function toggleReaderFinished() {
   showToast(item.status === 'finished' ? 'Marked as finished' : 'Moved back to reading');
 }
 
-function openReaderExternally() {
+async function openReaderExternally() {
   const item = state.items.find((entry) => entry.id === activeReaderId);
   if (!item) return;
-  if (item.url) window.open(item.url, '_blank', 'noopener');
+  if (item.url) {
+    if (window.ShelfStorage?.desktop) await openUrl(item.url);
+    else window.open(item.url, '_blank', 'noopener,noreferrer');
+  }
   else showToast('This saved copy only lives inside Shelf');
 }
 
@@ -309,7 +360,9 @@ function importLibrary(event) {
     try {
       const parsed = JSON.parse(reader.result);
       if (!Array.isArray(parsed.items)) throw new Error('Invalid shelf backup');
-      state.items = parsed.items; persist(); state.view = 'continue'; state.collection = null; render(); closeSettings(); showToast('Shelf backup restored');
+      const items = parsed.items.map(sanitizeItem).filter(Boolean).slice(0, 500);
+      if (!items.length) throw new Error('Empty shelf backup');
+      state.items = items; persist(); state.view = 'continue'; state.collection = null; render(); closeSettings(); showToast('Shelf backup restored');
     } catch { showToast('That backup could not be opened'); }
     event.target.value = '';
   };
@@ -334,11 +387,12 @@ function saveNewItem(event) {
     if (!selectedFile) return showToast('Choose a PDF to add');
     title = selectedFile.name.replace(/\.pdf$/i, '').replace(/[-_]/g, ' ');
   } else {
-    const url = els.linkInput.value.trim();
-    if (!url) return showToast('Paste a link to save');
+    const url = safeHttpsUrl(els.linkInput.value.trim());
+    if (!url) return showToast('Shelf saves HTTPS links only');
     try { title = new URL(url).hostname.replace(/^www\./, ''); } catch { return showToast('That link needs a little fixing'); }
+    els.linkInput.value = url;
   }
-  const item = { id: Date.now(), type, url: type === 'article' ? els.linkInput.value.trim() : '', title: title.charAt(0).toUpperCase() + title.slice(1), description: type === 'pdf' ? 'A new PDF waiting for your attention.' : 'A saved article, ready for a quieter moment.', source: type === 'pdf' ? 'Personal archive' : title, time: type === 'pdf' ? 'PDF file' : 'Saved offline', status: 'to-read', collection: els.collectionInput.value, tag: els.tagInput.value.trim(), progress: 0, tone: ['clay', 'sage', 'lavender', 'sky'][state.items.length % 4], saved: 'Saved just now' };
+  const item = sanitizeItem({ id: Date.now(), type, url: type === 'article' ? els.linkInput.value.trim() : '', title: title.charAt(0).toUpperCase() + title.slice(1), description: type === 'pdf' ? 'A new PDF waiting for your attention.' : 'A saved article, ready for a quieter moment.', source: type === 'pdf' ? 'Personal archive' : title, time: type === 'pdf' ? 'PDF file' : 'Saved offline', status: 'to-read', collection: els.collectionInput.value, tag: els.tagInput.value.trim(), progress: 0, tone: ['clay', 'sage', 'lavender', 'sky'][state.items.length % 4], saved: 'Saved just now' });
   state.items.unshift(item); persist(); render(); closeModal(); showToast(type === 'pdf' ? 'PDF saved to your shelf' : 'Link saved for offline reading');
   if (type === 'pdf') {
     window.ShelfStorage?.savePdf(selectedFile, item.id).then((filePath) => { if (filePath) { item.filePath = filePath; persist(); } }).catch(() => showToast('PDF added, but local file storage needs the desktop app'));
@@ -415,4 +469,7 @@ document.addEventListener('keydown', (event) => {
 if (localStorage.getItem('shelf-theme') === 'dark') document.body.classList.add('dark-mode');
 render();
 listenForShelfLinks();
-window.ShelfStorage?.loadItems().then((items) => { if (items?.length) { state.items = items; render(); } });
+window.ShelfStorage?.loadItems().then((items) => {
+  const safeItems = items?.map(sanitizeItem).filter(Boolean).slice(0, 500);
+  if (safeItems?.length) { state.items = safeItems; render(); }
+});
